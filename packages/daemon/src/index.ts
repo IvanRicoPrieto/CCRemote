@@ -1,0 +1,11 @@
+export { createCLI } from './cli.js';
+export { SessionManager } from './session/SessionManager.js';
+export { ClaudeSession } from './session/ClaudeSession.js';
+export { OutputParser } from './session/OutputParser.js';
+export { WebSocketServerWrapper } from './server/WebSocketServer.js';
+export { createStaticHandler } from './server/StaticFileServer.js';
+export { getTailscaleCerts } from './server/TailscaleCerts.js';
+export { DaemonClient, connectToDaemon } from './client/DaemonClient.js';
+export { getDatabase, initializeDatabase } from './db/database.js';
+export * from './auth/TokenAuth.js';
+export { capabilities, DEFAULT_MODEL } from './capabilities/ClaudeCapabilities.js';

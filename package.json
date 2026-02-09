@@ -1,0 +1,30 @@
+{
+  "name": "ccremote",
+  "version": "0.1.0",
+  "private": true,
+  "workspaces": [
+    "packages/daemon",
+    "packages/pwa",
+    "shared"
+  ],
+  "scripts": {
+    "dev:daemon": "npm run dev --workspace=packages/daemon",
+    "dev:pwa": "npm run dev --workspace=packages/pwa",
+    "dev": "concurrently \"npm run dev:daemon\" \"npm run dev:pwa\"",
+    "build": "npm run build --workspace=shared && npm run build --workspace=packages/daemon && npm run build --workspace=packages/pwa",
+    "build:daemon": "npm run build --workspace=packages/daemon",
+    "build:pwa": "npm run build --workspace=packages/pwa",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:daemon": "vitest run --project daemon",
+    "test:pwa": "vitest run --project pwa",
+    "lint": "eslint ."
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "concurrently": "^9.0.0",
+    "eslint": "^9.0.0",
+    "typescript": "^5.7.0",
+    "vitest": "^2.0.0"
+  }
+}

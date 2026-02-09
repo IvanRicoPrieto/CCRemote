@@ -1,0 +1,31 @@
+{
+  "name": "@ccremote/daemon",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "./dist/index.js",
+  "bin": {
+    "ccremote": "./dist/bin/ccremote.js"
+  },
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsx watch src/index.ts",
+    "start": "node dist/index.js",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "dependencies": {
+    "@ccremote/shared": "*",
+    "better-sqlite3": "^11.0.0",
+    "commander": "^12.0.0",
+    "nanoid": "^5.0.0",
+    "node-pty": "^1.0.0",
+    "qrcode-terminal": "^0.12.0",
+    "ws": "^8.18.0"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^7.0.0",
+    "@types/ws": "^8.5.0",
+    "tsx": "^4.0.0"
+  }
+}
