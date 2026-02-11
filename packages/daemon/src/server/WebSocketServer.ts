@@ -164,6 +164,9 @@ export class WebSocketServerWrapper {
       case 'send_key':
         this.handleSendKey(client, message.payload.sessionId, message.payload.key);
         break;
+      case 'scroll':
+        this.handleScroll(client.ws, message.payload.sessionId);
+        break;
       case 'resize_terminal':
         this.handleResizeTerminal(client, message.payload);
         break;
@@ -248,6 +251,15 @@ export class WebSocketServerWrapper {
     }
     if (!this.sessionManager.sendKey(sessionId, key)) {
       this.sendError(client.ws, `Session ${sessionId} not found`, sessionId);
+    }
+  }
+
+  private handleScroll(ws: WebSocket, sessionId: string): void {
+    const content = this.sessionManager.getScrollback(sessionId);
+    if (content !== null) {
+      this.send(ws, { type: 'scrollback_content', payload: { sessionId, content } });
+    } else {
+      this.sendError(ws, `Session ${sessionId} not found`, sessionId);
     }
   }
 

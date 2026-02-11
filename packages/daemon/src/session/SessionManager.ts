@@ -256,6 +256,12 @@ export class SessionManager extends EventEmitter {
     return true;
   }
 
+  getScrollback(sessionId: string): string | null {
+    const session = this.sessions.get(sessionId);
+    if (!session) return null;
+    return session.getScrollback();
+  }
+
   resizeSession(sessionId: string, cols: number, rows: number): boolean {
     const session = this.sessions.get(sessionId);
     if (!session) return false;

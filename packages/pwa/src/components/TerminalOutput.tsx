@@ -2,21 +2,18 @@ import { useEffect, useRef } from 'react';
 import { Terminal } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
 import '@xterm/xterm/css/xterm.css';
-import { stripAnsi, computeLinesToPush } from '../lib/screenDedup.js';
-
-// Module-level scrollback storage — persists across component mounts
-const scrollbackStore = new Map<string, string[]>();
-const MAX_SCROLLBACK_LINES = 2000;
+import { stripAnsi } from '../lib/screenDedup.js';
 
 interface TerminalOutputProps {
   sessionId: string;
   screen: string;
   onResize?: (cols: number, rows: number) => void;
   onInput?: (data: string) => void;
+  onRequestScrollback?: () => void;
   disableInput?: boolean;
 }
 
-export function TerminalOutput({ sessionId, screen, onResize, onInput, disableInput }: TerminalOutputProps) {
+export function TerminalOutput({ sessionId, screen, onResize, onInput, onRequestScrollback, disableInput }: TerminalOutputProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const terminalRef = useRef<Terminal | null>(null);
   const fitAddonRef = useRef<FitAddon | null>(null);
@@ -24,67 +21,21 @@ export function TerminalOutput({ sessionId, screen, onResize, onInput, disableIn
   onResizeRef.current = onResize;
   const onInputRef = useRef(onInput);
   onInputRef.current = onInput;
+  const onRequestScrollbackRef = useRef(onRequestScrollback);
+  onRequestScrollbackRef.current = onRequestScrollback;
   const disableInputRef = useRef(disableInput);
   disableInputRef.current = disableInput;
 
-  const isFirstWriteRef = useRef(true);
-  const lastRawLinesRef = useRef<string[]>([]);
-  const lastStrippedLinesRef = useRef<string[]>([]);
-  const lastStrippedJoinedRef = useRef('');
+  const lastStrippedRef = useRef('');
 
   function writeToTerminal(content: string) {
     const terminal = terminalRef.current;
     if (!terminal) return;
 
     const rows = terminal.rows;
-    const buf = terminal.buffer.active;
-    const wasScrolledUp = buf.viewportY < buf.baseY;
-    const savedViewportY = wasScrolledUp ? buf.viewportY : -1;
-
-    const newRawLines = content.split('\n');
-    const newStrippedLines = newRawLines.map(stripAnsi);
-
-    let pushContent = '';
-
-    if (isFirstWriteRef.current) {
-      // On first write, restore scrollback from previous mount
-      const stored = scrollbackStore.get(sessionId);
-      if (stored && stored.length > 0) {
-        const scrollbackContent = stored.map(l => l + '\x1b[K').join('\n');
-        // Write stored lines then push them all to scrollback
-        terminal.write(scrollbackContent + '\n' + `\x1b[${rows};1H` + '\n'.repeat(rows));
-      }
-    } else {
-      const { linesToPush } = computeLinesToPush(
-        lastRawLinesRef.current,
-        lastStrippedLinesRef.current,
-        newRawLines,
-        newStrippedLines,
-      );
-
-      if (linesToPush.length > 0) {
-        pushContent = `\x1b[${rows};1H` + '\n'.repeat(linesToPush.length);
-        // Store pushed lines for scrollback persistence across mounts
-        const existing = scrollbackStore.get(sessionId) || [];
-        existing.push(...linesToPush);
-        if (existing.length > MAX_SCROLLBACK_LINES) {
-          existing.splice(0, existing.length - MAX_SCROLLBACK_LINES);
-        }
-        scrollbackStore.set(sessionId, existing);
-      }
-    }
-
-    isFirstWriteRef.current = false;
-    lastRawLinesRef.current = newRawLines;
-    lastStrippedLinesRef.current = newStrippedLines;
-
-    const formatted = newRawLines.map(l => l + '\x1b[K').join('\n');
-
-    terminal.write(pushContent + '\x1b[H' + formatted + '\x1b[0J', () => {
-      if (savedViewportY >= 0) {
-        terminal.scrollToLine(savedViewportY);
-      }
-    });
+    const lines = content.split('\n').slice(0, rows);
+    const formatted = lines.map(l => l + '\x1b[K').join('\n');
+    terminal.write('\x1b[H' + formatted + '\x1b[0J');
   }
 
   // Initialize terminal
@@ -95,7 +46,7 @@ export function TerminalOutput({ sessionId, screen, onResize, onInput, disableIn
       cursorBlink: true,
       cursorStyle: 'bar',
       convertEol: true,
-      scrollback: 5000,
+      scrollback: 0,
       fontSize: 13,
       fontFamily: "'JetBrains Mono', 'Fira Code', 'Cascadia Code', Menlo, monospace",
       theme: {
@@ -141,8 +92,6 @@ export function TerminalOutput({ sessionId, screen, onResize, onInput, disableIn
       if (!disableInputRef.current) {
         onInputRef.current?.(data);
       }
-      // Scroll to bottom on user input
-      terminal.scrollToBottom();
     });
 
     terminalRef.current = terminal;
@@ -188,55 +137,48 @@ export function TerminalOutput({ sessionId, screen, onResize, onInput, disableIn
     };
   }, []);
 
-  // Manual touch scroll for mobile (xterm.js viewport touch events are blocked by .xterm-screen overlay)
+  // Mouse wheel up → request scrollback overlay
+  useEffect(() => {
+    const container = containerRef.current;
+    if (!container) return;
+
+    const onWheel = (e: WheelEvent) => {
+      if (e.deltaY < 0) {
+        e.preventDefault();
+        onRequestScrollbackRef.current?.();
+      }
+    };
+
+    container.addEventListener('wheel', onWheel, { passive: false });
+    return () => container.removeEventListener('wheel', onWheel);
+  }, []);
+
+  // Touch swipe up → request scrollback overlay
   useEffect(() => {
     const container = containerRef.current;
     if (!container) return;
 
     let startY = 0;
-    let accum = 0;
 
     const onTouchStart = (e: TouchEvent) => {
       if (e.touches.length !== 1) return;
       startY = e.touches[0].clientY;
-      accum = 0;
     };
 
-    const onTouchMove = (e: TouchEvent) => {
-      if (e.touches.length !== 1) return;
-      const terminal = terminalRef.current;
-      if (!terminal) return;
-
-      const currentY = e.touches[0].clientY;
-      const deltaY = startY - currentY;
-      startY = currentY;
-
-      const el = terminal.element;
-      if (!el) return;
-      const lineHeight = el.clientHeight / terminal.rows;
-
-      accum += deltaY;
-      const lines = Math.trunc(accum / lineHeight);
-      if (lines !== 0) {
-        const prevY = terminal.buffer.active.viewportY;
-        terminal.scrollLines(lines);
-        // Reset accumulator if we hit a boundary (scroll didn't move)
-        if (terminal.buffer.active.viewportY === prevY) {
-          accum = 0;
-        } else {
-          accum -= lines * lineHeight;
-        }
+    const onTouchEnd = (e: TouchEvent) => {
+      if (e.changedTouches.length !== 1) return;
+      const deltaY = startY - e.changedTouches[0].clientY;
+      if (deltaY > 80) {
+        onRequestScrollbackRef.current?.();
       }
-
-      e.preventDefault();
     };
 
     container.addEventListener('touchstart', onTouchStart, { passive: true });
-    container.addEventListener('touchmove', onTouchMove, { passive: false });
+    container.addEventListener('touchend', onTouchEnd, { passive: true });
 
     return () => {
       container.removeEventListener('touchstart', onTouchStart);
-      container.removeEventListener('touchmove', onTouchMove);
+      container.removeEventListener('touchend', onTouchEnd);
     };
   }, []);
 
@@ -244,9 +186,10 @@ export function TerminalOutput({ sessionId, screen, onResize, onInput, disableIn
   useEffect(() => {
     if (!screen || !terminalRef.current) return;
 
-    const stripped = screen.split('\n').map(stripAnsi).join('\n');
-    if (stripped !== lastStrippedJoinedRef.current) {
-      lastStrippedJoinedRef.current = stripped;
+    const rows = terminalRef.current.rows;
+    const stripped = screen.split('\n').slice(0, rows).map(stripAnsi).join('\n');
+    if (stripped !== lastStrippedRef.current) {
+      lastStrippedRef.current = stripped;
       writeToTerminal(screen);
     }
   }, [screen]);

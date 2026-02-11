@@ -29,6 +29,7 @@ interface UseWebSocketReturn {
   outputScreens: Map<string, string>;
   clearOutputScreen: (sessionId: string) => void;
   directoryListing: DirectoryListing | null;
+  scrollbackContent: Map<string, string>;
 }
 
 const RECONNECT_DELAYS = [1000, 2000, 4000, 8000, 16000, 30000];
@@ -45,6 +46,7 @@ export function useWebSocket({
   const [error, setError] = useState<string | null>(null);
   const [outputScreens, setOutputScreens] = useState<Map<string, string>>(new Map());
   const [directoryListing, setDirectoryListing] = useState<DirectoryListing | null>(null);
+  const [scrollbackContent, setScrollbackContent] = useState<Map<string, string>>(new Map());
 
   const wsRef = useRef<WebSocket | null>(null);
   const reconnectAttemptRef = useRef(0);
@@ -149,6 +151,14 @@ export function useWebSocket({
         });
         break;
 
+      case 'scrollback_content':
+        setScrollbackContent((prev) => {
+          const next = new Map(prev);
+          next.set(message.payload.sessionId, message.payload.content);
+          return next;
+        });
+        break;
+
       case 'directory_listing':
         setDirectoryListing(message.payload);
         break;
@@ -221,5 +231,6 @@ export function useWebSocket({
     outputScreens,
     clearOutputScreen,
     directoryListing,
+    scrollbackContent,
   };
 }

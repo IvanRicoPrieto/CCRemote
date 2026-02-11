@@ -67,6 +67,11 @@ export interface BrowseDirectoryMessage {
   payload: { path: string };
 }
 
+export interface ScrollMessage {
+  type: 'scroll';
+  payload: { sessionId: string };
+}
+
 export interface PingMessage {
   type: 'ping';
   payload: Record<string, never>;
@@ -86,6 +91,7 @@ export type ClientMessage =
   | SendKeyMessage
   | ResizeTerminalMessage
   | BrowseDirectoryMessage
+  | ScrollMessage
   | PingMessage;
 
 export type ClientMessageType = ClientMessage['type'];
@@ -154,6 +160,11 @@ export interface DirectoryListingMessage {
   payload: { path: string; directories: string[]; error?: string };
 }
 
+export interface ScrollbackContentMessage {
+  type: 'scrollback_content';
+  payload: { sessionId: string; content: string };
+}
+
 export interface PongMessage {
   type: 'pong';
   payload: Record<string, never>;
@@ -170,6 +181,7 @@ export type ServerMessage =
   | ContextLimitMessage
   | CapabilitiesMessage
   | DirectoryListingMessage
+  | ScrollbackContentMessage
   | ErrorMessage
   | PongMessage;
 

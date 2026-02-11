@@ -309,6 +309,20 @@ export class ClaudeSession extends EventEmitter {
     }
   }
 
+  // --- Scrollback ---
+
+  getScrollback(): string {
+    if (!this.isTmuxAlive()) return '';
+    try {
+      return execFileSync('tmux', [
+        'capture-pane', '-t', this._tmuxSessionName,
+        '-S', '-', '-p',
+      ], { encoding: 'utf8' });
+    } catch {
+      return '';
+    }
+  }
+
   // --- Input ---
 
   sendInput(input: string): void {

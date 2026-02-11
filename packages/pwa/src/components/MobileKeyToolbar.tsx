@@ -1,7 +1,8 @@
-import { ArrowUp, ArrowDown, ArrowLeft, ArrowRight, CornerDownLeft, X, ChevronsUp, ChevronsDown } from 'lucide-react';
+import { ArrowUp, ArrowDown, ArrowLeft, ArrowRight, CornerDownLeft, X, ChevronsUp } from 'lucide-react';
 
 interface MobileKeyToolbarProps {
   onKey: (data: string) => void;
+  onScroll?: () => void;
 }
 
 const KEY_ESCAPE = '\x1b';
@@ -12,10 +13,8 @@ const KEY_ARROW_LEFT = '\x1b[D';
 const KEY_ENTER = '\r';
 const KEY_TAB = '\t';
 const KEY_CTRL_C = '\x03';
-const KEY_PAGE_UP = '\x1b[5~';
-const KEY_PAGE_DOWN = '\x1b[6~';
 
-export function MobileKeyToolbar({ onKey }: MobileKeyToolbarProps) {
+export function MobileKeyToolbar({ onKey, onScroll }: MobileKeyToolbarProps) {
   const btn =
     'flex items-center justify-center h-10 min-w-[40px] px-2 rounded-lg bg-slate-700/80 active:bg-slate-600 text-slate-200 text-sm font-medium select-none touch-manipulation';
 
@@ -23,6 +22,12 @@ export function MobileKeyToolbar({ onKey }: MobileKeyToolbarProps) {
     e.preventDefault();
     (document.activeElement as HTMLElement)?.blur();
     onKey(data);
+  };
+
+  const handleScrollBtn = (e: React.PointerEvent) => {
+    e.preventDefault();
+    (document.activeElement as HTMLElement)?.blur();
+    onScroll?.();
   };
 
   return (
@@ -51,11 +56,8 @@ export function MobileKeyToolbar({ onKey }: MobileKeyToolbarProps) {
 
       <div className="w-px h-6 bg-slate-600/50 mx-0.5" />
 
-      <button className={btn} tabIndex={-1} onPointerDown={(e) => handlePointerDown(e, KEY_PAGE_UP)}>
+      <button className={btn} tabIndex={-1} onPointerDown={(e) => handleScrollBtn(e)}>
         <ChevronsUp size={18} />
-      </button>
-      <button className={btn} tabIndex={-1} onPointerDown={(e) => handlePointerDown(e, KEY_PAGE_DOWN)}>
-        <ChevronsDown size={18} />
       </button>
 
       <div className="w-px h-6 bg-slate-600/50 mx-0.5" />

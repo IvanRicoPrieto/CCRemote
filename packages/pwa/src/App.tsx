@@ -22,6 +22,7 @@ function App() {
     outputScreens,
     clearOutputScreen,
     directoryListing,
+    scrollbackContent,
   } = useWebSocket({
     url: connectionConfig?.url ?? '',
     token: connectionConfig?.token ?? '',
@@ -41,6 +42,11 @@ function App() {
   const handleInput = (data: string) => {
     if (!selectedSession) return;
     send({ type: 'send_key', payload: { sessionId: selectedSession.id, key: data } });
+  };
+
+  const handleRequestScrollback = () => {
+    if (!selectedSession) return;
+    send({ type: 'scroll', payload: { sessionId: selectedSession.id } });
   };
 
   const handleResize = (cols: number, rows: number) => {
@@ -79,15 +85,18 @@ function App() {
   // Session detail view
   if (currentSession) {
     const sessionScreen = outputScreens.get(currentSession.id) ?? '';
+    const sessionScrollback = scrollbackContent.get(currentSession.id);
 
     return (
       <div className="h-screen h-[100dvh] flex flex-col bg-surface-dark">
         <SessionView
           session={currentSession}
           screen={sessionScreen}
+          scrollback={sessionScrollback}
           onBack={() => setSelectedSession(null)}
           onResize={handleResize}
           onInput={handleInput}
+          onRequestScrollback={handleRequestScrollback}
         />
       </div>
     );
