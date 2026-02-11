@@ -218,8 +218,14 @@ export function TerminalOutput({ sessionId, screen, onResize, onInput, disableIn
       accum += deltaY;
       const lines = Math.trunc(accum / lineHeight);
       if (lines !== 0) {
+        const prevY = terminal.buffer.active.viewportY;
         terminal.scrollLines(lines);
-        accum -= lines * lineHeight;
+        // Reset accumulator if we hit a boundary (scroll didn't move)
+        if (terminal.buffer.active.viewportY === prevY) {
+          accum = 0;
+        } else {
+          accum -= lines * lineHeight;
+        }
       }
 
       e.preventDefault();
