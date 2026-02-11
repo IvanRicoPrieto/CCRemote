@@ -14,6 +14,7 @@ interface SessionViewProps {
 }
 
 export function SessionView({
+  session,
   screen,
   onBack,
   onResize,
@@ -63,6 +64,7 @@ export function SessionView({
           <ArrowLeft size={18} />
         </button>
         <TerminalOutput
+          sessionId={session.id}
           screen={screen}
           onResize={onResize}
           onInput={onInput}

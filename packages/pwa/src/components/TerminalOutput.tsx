@@ -4,14 +4,19 @@ import { FitAddon } from '@xterm/addon-fit';
 import '@xterm/xterm/css/xterm.css';
 import { stripAnsi, computeLinesToPush } from '../lib/screenDedup.js';
 
+// Module-level scrollback storage — persists across component mounts
+const scrollbackStore = new Map<string, string[]>();
+const MAX_SCROLLBACK_LINES = 2000;
+
 interface TerminalOutputProps {
+  sessionId: string;
   screen: string;
   onResize?: (cols: number, rows: number) => void;
   onInput?: (data: string) => void;
   disableInput?: boolean;
 }
 
-export function TerminalOutput({ screen, onResize, onInput, disableInput }: TerminalOutputProps) {
+export function TerminalOutput({ sessionId, screen, onResize, onInput, disableInput }: TerminalOutputProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const terminalRef = useRef<Terminal | null>(null);
   const fitAddonRef = useRef<FitAddon | null>(null);
@@ -34,14 +39,22 @@ export function TerminalOutput({ screen, onResize, onInput, disableInput }: Term
     const rows = terminal.rows;
     const buf = terminal.buffer.active;
     const wasScrolledUp = buf.viewportY < buf.baseY;
-    const scrollOffset = wasScrolledUp ? buf.baseY - buf.viewportY : 0;
+    const savedViewportY = wasScrolledUp ? buf.viewportY : -1;
 
     const newRawLines = content.split('\n');
     const newStrippedLines = newRawLines.map(stripAnsi);
 
     let pushContent = '';
 
-    if (!isFirstWriteRef.current) {
+    if (isFirstWriteRef.current) {
+      // On first write, restore scrollback from previous mount
+      const stored = scrollbackStore.get(sessionId);
+      if (stored && stored.length > 0) {
+        const scrollbackContent = stored.map(l => l + '\x1b[K').join('\n');
+        // Write stored lines then push them all to scrollback
+        terminal.write(scrollbackContent + '\n' + `\x1b[${rows};1H` + '\n'.repeat(rows));
+      }
+    } else {
       const { linesToPush } = computeLinesToPush(
         lastRawLinesRef.current,
         lastStrippedLinesRef.current,
@@ -51,6 +64,13 @@ export function TerminalOutput({ screen, onResize, onInput, disableInput }: Term
 
       if (linesToPush.length > 0) {
         pushContent = `\x1b[${rows};1H` + '\n'.repeat(linesToPush.length);
+        // Store pushed lines for scrollback persistence across mounts
+        const existing = scrollbackStore.get(sessionId) || [];
+        existing.push(...linesToPush);
+        if (existing.length > MAX_SCROLLBACK_LINES) {
+          existing.splice(0, existing.length - MAX_SCROLLBACK_LINES);
+        }
+        scrollbackStore.set(sessionId, existing);
       }
     }
 
@@ -61,8 +81,8 @@ export function TerminalOutput({ screen, onResize, onInput, disableInput }: Term
     const formatted = newRawLines.map(l => l + '\x1b[K').join('\n');
 
     terminal.write(pushContent + '\x1b[H' + formatted + '\x1b[0J', () => {
-      if (wasScrolledUp) {
-        terminal.scrollToLine(terminal.buffer.active.baseY - scrollOffset);
+      if (savedViewportY >= 0) {
+        terminal.scrollToLine(savedViewportY);
       }
     });
   }
