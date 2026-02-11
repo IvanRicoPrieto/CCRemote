@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import type { SessionInfo } from '@ccremote/shared';
+import type { SessionInfo, SessionType } from '@ccremote/shared';
 import { useWebSocket } from './hooks/useWebSocket.ts';
 import { useSessions } from './hooks/useSessions.ts';
 import { ConnectionSetup } from './components/ConnectionSetup.tsx';
@@ -48,8 +48,8 @@ function App() {
     send({ type: 'resize_terminal', payload: { sessionId: selectedSession.id, cols, rows } });
   };
 
-  const handleCreateSession = (projectPath: string, model: string) => {
-    send({ type: 'create_session', payload: { projectPath, model } });
+  const handleCreateSession = (projectPath: string, model: string, sessionType: SessionType) => {
+    send({ type: 'create_session', payload: { projectPath, model, sessionType } });
     setShowNewSession(false);
   };
 

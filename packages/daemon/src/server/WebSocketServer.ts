@@ -200,13 +200,14 @@ export class WebSocketServerWrapper {
 
   private handleCreateSession(
     ws: WebSocket,
-    payload: { projectPath: string; model?: string; planMode?: boolean }
+    payload: { projectPath: string; model?: string; planMode?: boolean; sessionType?: string }
   ): void {
     try {
       this.sessionManager.createSession({
         projectPath: payload.projectPath,
         model: payload.model,
         planMode: payload.planMode,
+        sessionType: (payload.sessionType as 'claude' | 'shell') ?? 'claude',
       });
     } catch (error) {
       this.sendError(ws, `Failed to create session: ${(error as Error).message}`);

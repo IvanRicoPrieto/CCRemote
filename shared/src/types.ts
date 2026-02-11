@@ -1,3 +1,5 @@
+export type SessionType = 'claude' | 'shell';
+
 export type SessionState =
   | 'starting'
   | 'idle'
@@ -12,6 +14,7 @@ export type InputType = 'confirmation' | 'selection' | 'open_question';
 
 export interface SessionInfo {
   id: string;
+  sessionType: SessionType;
   projectPath: string;
   projectName: string;
   model: string;
@@ -29,6 +32,7 @@ export interface SessionConfig {
   model?: string;
   planMode?: boolean;
   autoAccept?: boolean;
+  sessionType?: SessionType;
 }
 
 export interface ModelInfo {

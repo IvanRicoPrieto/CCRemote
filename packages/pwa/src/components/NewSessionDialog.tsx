@@ -1,11 +1,11 @@
 import { useState, useEffect } from 'react';
-import { X, Folder, ChevronRight, Home, ArrowUp } from 'lucide-react';
-import type { ClientMessage } from '@ccremote/shared';
+import { X, Folder, ChevronRight, Home, ArrowUp, Terminal, Bot } from 'lucide-react';
+import type { ClientMessage, SessionType } from '@ccremote/shared';
 import type { DirectoryListing } from '../hooks/useWebSocket.ts';
 
 interface NewSessionDialogProps {
   onClose: () => void;
-  onCreate: (projectPath: string, model: string) => void;
+  onCreate: (projectPath: string, model: string, sessionType: SessionType) => void;
   send: (message: ClientMessage) => void;
   directoryListing: DirectoryListing | null;
 }
@@ -19,6 +19,7 @@ const MODELS = [
 export function NewSessionDialog({ onClose, onCreate, send, directoryListing }: NewSessionDialogProps) {
   const [currentPath, setCurrentPath] = useState('~');
   const [model, setModel] = useState('opus');
+  const [sessionType, setSessionType] = useState<SessionType>('claude');
 
   // Request directory listing when path changes
   useEffect(() => {
@@ -39,7 +40,7 @@ export function NewSessionDialog({ onClose, onCreate, send, directoryListing }: 
   };
 
   const handleSelect = () => {
-    onCreate(resolvedPath, model);
+    onCreate(resolvedPath, model, sessionType);
   };
 
   // Split path into breadcrumb segments
@@ -113,27 +114,61 @@ export function NewSessionDialog({ onClose, onCreate, send, directoryListing }: 
           )}
         </div>
 
-        {/* Model selector + Create button */}
+        {/* Session type + Model selector + Create button */}
         <div className="p-4 space-y-3 border-t border-slate-700/50">
+          {/* Session type toggle */}
           <div>
-            <label className="block text-xs text-slate-400 mb-1.5">Modelo</label>
+            <label className="block text-xs text-slate-400 mb-1.5">Tipo de sesión</label>
             <div className="flex gap-2">
-              {MODELS.map((m) => (
-                <button
-                  key={m.id}
-                  type="button"
-                  onClick={() => setModel(m.id)}
-                  className={`flex-1 py-2 rounded-lg text-sm font-medium transition-colors ${
-                    model === m.id
-                      ? 'bg-indigo-600 text-white'
-                      : 'bg-slate-700/80 text-slate-300 hover:bg-slate-700'
-                  }`}
-                >
-                  {m.label}
-                </button>
-              ))}
+              <button
+                type="button"
+                onClick={() => setSessionType('claude')}
+                className={`flex-1 flex items-center justify-center gap-2 py-2 rounded-lg text-sm font-medium transition-colors ${
+                  sessionType === 'claude'
+                    ? 'bg-indigo-600 text-white'
+                    : 'bg-slate-700/80 text-slate-300 hover:bg-slate-700'
+                }`}
+              >
+                <Bot size={16} />
+                Claude
+              </button>
+              <button
+                type="button"
+                onClick={() => setSessionType('shell')}
+                className={`flex-1 flex items-center justify-center gap-2 py-2 rounded-lg text-sm font-medium transition-colors ${
+                  sessionType === 'shell'
+                    ? 'bg-indigo-600 text-white'
+                    : 'bg-slate-700/80 text-slate-300 hover:bg-slate-700'
+                }`}
+              >
+                <Terminal size={16} />
+                Terminal
+              </button>
             </div>
           </div>
+
+          {/* Model selector (only for Claude sessions) */}
+          {sessionType === 'claude' && (
+            <div>
+              <label className="block text-xs text-slate-400 mb-1.5">Modelo</label>
+              <div className="flex gap-2">
+                {MODELS.map((m) => (
+                  <button
+                    key={m.id}
+                    type="button"
+                    onClick={() => setModel(m.id)}
+                    className={`flex-1 py-2 rounded-lg text-sm font-medium transition-colors ${
+                      model === m.id
+                        ? 'bg-indigo-600 text-white'
+                        : 'bg-slate-700/80 text-slate-300 hover:bg-slate-700'
+                    }`}
+                  >
+                    {m.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
 
           <button
             onClick={handleSelect}

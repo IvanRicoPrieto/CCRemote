@@ -1,4 +1,4 @@
-import { Folder, Clock, AlertCircle, Loader2, CheckCircle2, Plus, Trash2, Hash } from 'lucide-react';
+import { Folder, Terminal, Clock, AlertCircle, Loader2, CheckCircle2, Plus, Trash2, Hash } from 'lucide-react';
 import { useState } from 'react';
 import type { SessionInfo, SessionState } from '@ccremote/shared';
 
@@ -74,7 +74,11 @@ export function SessionList({ sessions, onSelectSession, onCreateSession, onKill
               <div className="flex items-start justify-between">
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center gap-2">
-                    <Folder size={16} className="text-indigo-400 flex-shrink-0" />
+                    {session.sessionType === 'shell' ? (
+                      <Terminal size={16} className="text-emerald-400 flex-shrink-0" />
+                    ) : (
+                      <Folder size={16} className="text-indigo-400 flex-shrink-0" />
+                    )}
                     <h3 className="font-medium truncate">{session.projectName}</h3>
                   </div>
                   <div className="flex items-center gap-2 mt-1">
@@ -94,7 +98,7 @@ export function SessionList({ sessions, onSelectSession, onCreateSession, onKill
 
               <div className="flex items-center justify-between mt-3 text-xs text-slate-500">
                 <span className="bg-slate-700/50 px-2 py-0.5 rounded">
-                  {session.model}
+                  {session.sessionType === 'shell' ? 'Shell' : session.model}
                 </span>
                 <div className="flex items-center gap-1">
                   <Clock size={12} />

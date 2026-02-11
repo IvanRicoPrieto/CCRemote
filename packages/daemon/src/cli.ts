@@ -120,15 +120,22 @@ export function createCLI(): Command {
   program
     .command('stop')
     .description('Stop the CCRemote daemon')
-    .action(() => {
+    .option('--kill-sessions', 'Kill all tmux sessions before stopping (by default sessions persist)')
+    .action((options) => {
       if (!isDaemonRunning()) {
         console.log('Daemon is not running.');
         return;
       }
       const pid = parseInt(readFileSync(PID_FILE, 'utf-8').trim(), 10);
       try {
-        process.kill(pid, 'SIGTERM');
-        console.log('Daemon stopped.');
+        if (options.killSessions) {
+          // Send SIGUSR1 to kill sessions, then SIGTERM to stop
+          process.kill(pid, 'SIGUSR1');
+          console.log('Daemon stopped (all sessions killed).');
+        } else {
+          process.kill(pid, 'SIGTERM');
+          console.log('Daemon stopped (sessions persist in tmux).');
+        }
       } catch (error) {
         console.error('Failed to stop daemon:', error);
       }
@@ -226,14 +233,16 @@ export function createCLI(): Command {
   // NEW command
   program
     .command('new')
-    .description('Create a new Claude Code session')
+    .description('Create a new Claude Code or shell session')
     .option('-p, --project <path>', 'Project directory', process.cwd())
     .option('-m, --model <model>', 'Model to use')
     .option('--plan', 'Enable plan mode')
+    .option('--shell', 'Create a plain shell session instead of Claude')
     .option('--port <port>', 'Daemon port', '9876')
     .action(async (options) => {
       try {
         const port = parseInt(options.port, 10);
+        const sessionType = options.shell ? 'shell' : 'claude';
         const client = await connectToDaemon(port);
         const response = await client.sendAndWait<SessionCreatedMessage>(
           {
@@ -242,6 +251,7 @@ export function createCLI(): Command {
               projectPath: options.project,
               model: options.model,
               planMode: options.plan,
+              sessionType,
             },
           },
           'session_created'
@@ -249,9 +259,11 @@ export function createCLI(): Command {
         client.close();
 
         const session = response.payload.session;
-        console.log(`Session created: ${session.id}`);
+        console.log(`Session created: ${session.id} (${session.sessionType})`);
         console.log(`  Project: ${session.projectName}`);
-        console.log(`  Model: ${session.model}`);
+        if (session.sessionType !== 'shell') {
+          console.log(`  Model: ${session.model}`);
+        }
         console.log(`  State: ${session.state}`);
       } catch (error) {
         console.error(`Failed to create session: ${(error as Error).message}`);
@@ -381,7 +393,13 @@ async function startDaemon(port: number, tailscale: TailscaleInfo): Promise<void
   initializeDatabase(db);
 
   const token = getOrCreateToken(db);
-  const sessionManager = new SessionManager();
+  const sessionManager = new SessionManager(db);
+
+  // Rediscover sessions from a previous daemon run
+  const reconnected = sessionManager.rediscoverSessions();
+  if (reconnected > 0) {
+    console.log(`Reconnected to ${reconnected} existing session(s).`);
+  }
 
   // Resolve PWA dist path
   const pwaDistPath = getPwaDistPath();
@@ -443,7 +461,18 @@ async function startDaemon(port: number, tailscale: TailscaleInfo): Promise<void
   });
 
   const shutdown = () => {
-    console.log('\nShutting down...');
+    console.log('\nShutting down (sessions will persist in tmux)...');
+    sessionManager.disconnectAll();
+    wsServer.close();
+    httpServer.close();
+    db.close();
+    removePidFile();
+    process.exit(0);
+  };
+
+  // SIGUSR1 = kill all sessions then shutdown
+  const killAndShutdown = () => {
+    console.log('\nKilling all sessions and shutting down...');
     sessionManager.killAll();
     wsServer.close();
     httpServer.close();
@@ -454,6 +483,7 @@ async function startDaemon(port: number, tailscale: TailscaleInfo): Promise<void
 
   process.on('SIGTERM', shutdown);
   process.on('SIGINT', shutdown);
+  process.on('SIGUSR1', killAndShutdown);
 
   await new Promise(() => {});
 }

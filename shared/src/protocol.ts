@@ -1,4 +1,4 @@
-import type { SessionInfo, InputType, Capabilities } from './types.js';
+import type { SessionInfo, SessionType, InputType, Capabilities } from './types.js';
 
 // === Client Messages (PWA → Daemon) ===
 
@@ -19,7 +19,7 @@ export interface SendCommandMessage {
 
 export interface CreateSessionMessage {
   type: 'create_session';
-  payload: { projectPath: string; model?: string; planMode?: boolean };
+  payload: { projectPath: string; model?: string; planMode?: boolean; sessionType?: SessionType };
 }
 
 export interface KillSessionMessage {

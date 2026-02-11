@@ -3,7 +3,7 @@ import { execFileSync, execFile as execFileCb } from 'node:child_process';
 import { promisify } from 'node:util';
 import * as pty from 'node-pty';
 import { nanoid } from 'nanoid';
-import type { SessionState, SessionConfig, SessionInfo } from '@ccremote/shared';
+import type { SessionState, SessionType, SessionConfig, SessionInfo } from '@ccremote/shared';
 import { OutputParser, type InputRequiredEvent } from './OutputParser.js';
 import { DEFAULT_MODEL } from '../capabilities/ClaudeCapabilities.js';
 import { basename } from 'node:path';
@@ -24,7 +24,7 @@ export class ClaudeSession extends EventEmitter {
   readonly createdAt: Date;
 
   private readerPty: pty.IPty | null = null;
-  private parser: OutputParser;
+  private parser: OutputParser | null;
   private _state: SessionState = 'starting';
   private _lastActivity: Date;
   private _tmuxSessionName: string;
@@ -39,24 +39,31 @@ export class ClaudeSession extends EventEmitter {
   private hasReceivedResize: boolean = false;
   private readonly CAPTURE_DEBOUNCE_MS = 30;
 
-  constructor(config: SessionConfig) {
+  constructor(config: SessionConfig, id?: string) {
     super();
-    this.id = nanoid(12);
+    this.id = id ?? nanoid(12);
     this.config = {
       projectPath: config.projectPath,
       model: config.model ?? DEFAULT_MODEL,
       planMode: config.planMode ?? false,
       autoAccept: config.autoAccept ?? false,
+      sessionType: config.sessionType ?? 'claude',
     };
     this.createdAt = new Date();
     this._lastActivity = new Date();
     this._tmuxSessionName = `ccremote-${this.id}`;
-    this.parser = new OutputParser();
-    this.setupParserListeners();
+
+    if (this.config.sessionType === 'shell') {
+      this.parser = null;
+    } else {
+      this.parser = new OutputParser();
+      this.setupParserListeners();
+    }
   }
 
   private setupParserListeners(): void {
-    this.parser.on('input_required', (event: InputRequiredEvent) => {
+    const parser = this.parser!;
+    parser.on('input_required', (event: InputRequiredEvent) => {
       if (event.type === 'confirmation') {
         this.setState('awaiting_confirmation');
       } else {
@@ -65,24 +72,23 @@ export class ClaudeSession extends EventEmitter {
       this.emit('input_required', event);
     });
 
-    this.parser.on('working', () => {
+    parser.on('working', () => {
       this.setState('working');
     });
 
-    this.parser.on('context_limit', (context: string) => {
+    parser.on('context_limit', (context: string) => {
       this.setState('context_limit');
       this.emit('context_limit', context);
     });
 
-    this.parser.on('possibly_idle', () => {
+    parser.on('possibly_idle', () => {
       if (this._state === 'working') {
         this.setState('idle');
       }
     });
 
-    this.parser.on('activity', () => {
+    parser.on('activity', () => {
       this._lastActivity = new Date();
-      // Don't capture until a client has sent a resize (so we know the right dimensions)
       if (this.hasReceivedResize) {
         this.scheduleCaptureScreen();
       }
@@ -90,11 +96,18 @@ export class ClaudeSession extends EventEmitter {
   }
 
   start(): void {
-    const args = this.buildArgs();
-    const claudeCmd = ['claude', ...args].join(' ');
+    let shellCommand: string[];
+    if (this.config.sessionType === 'shell') {
+      const userShell = process.env['SHELL'] ?? '/bin/bash';
+      shellCommand = ['sh', '-c', userShell];
+    } else {
+      const args = this.buildArgs();
+      shellCommand = ['sh', '-c', ['claude', ...args].join(' ')];
+    }
+
+    console.log(`[ClaudeSession] start() sessionType=${this.config.sessionType} command=${JSON.stringify(shellCommand)}`);
 
     try {
-      // Create a detached tmux session running claude
       execFileSync('tmux', [
         'new-session',
         '-d',
@@ -102,66 +115,112 @@ export class ClaudeSession extends EventEmitter {
         '-x', '120',
         '-y', '40',
         '-c', this.config.projectPath,
-        '--', ...['sh', '-c', claudeCmd],
+        '--', ...shellCommand,
       ]);
 
-      // Disable tmux status bar — it corrupts the terminal output for the PWA
-      execFileSync('tmux', [
-        'set-option', '-t', this._tmuxSessionName,
-        'status', 'off',
-      ]);
-
-      // Use largest client for window size — so a native terminal (ccremote attach)
-      // always dictates the size, even when a smaller PWA client is connected
-      execFileSync('tmux', [
-        'set-option', '-t', this._tmuxSessionName,
-        'window-size', 'largest',
-      ]);
-
-      // Enable mouse support — allows scroll wheel in native terminals
-      execFileSync('tmux', [
-        'set-option', '-t', this._tmuxSessionName,
-        'mouse', 'on',
-      ]);
-
-      // Attach a read-only pty to detect output changes (for OutputParser + capture trigger)
-      this.readerPty = pty.spawn('tmux', [
-        'attach-session',
-        '-t', this._tmuxSessionName,
-        '-r',
-      ], {
-        name: 'xterm-256color',
-        cols: 120,
-        rows: 40,
-        env: process.env as Record<string, string>,
-      });
-
-      this.readerPty.onData((data: string) => {
-        this.parser.feed(data);
-      });
-
-      this.readerPty.onExit(() => {
-        // Reader exited — check if tmux session is still alive
-        if (!this.isTmuxAlive()) {
-          this.setState('dead');
-          this.emit('exit', 0);
-        }
-      });
-
-      // Periodic health check
-      this.healthCheckInterval = setInterval(() => {
-        if (!this.isTmuxAlive()) {
-          this.setState('dead');
-          this.emit('exit', 0);
-          this.stopHealthCheck();
-        }
-      }, 5000);
-
+      this.applyTmuxOptions();
+      this.attachReaderPty();
       this.setState('idle');
     } catch (error) {
       this.setState('error');
       throw error;
     }
+  }
+
+  /** Reconnect to an already-running tmux session (after daemon restart). */
+  attachToExisting(): void {
+    if (!this.isTmuxAlive()) {
+      this.setState('dead');
+      return;
+    }
+
+    try {
+      this.applyTmuxOptions();
+      this.attachReaderPty();
+      this.setState('idle');
+    } catch (error) {
+      this.setState('error');
+      throw error;
+    }
+  }
+
+  /** Detach from tmux without killing it (for graceful daemon shutdown). */
+  disconnect(): void {
+    this.stopHealthCheck();
+
+    if (this.captureTimer) {
+      clearTimeout(this.captureTimer);
+      this.captureTimer = null;
+    }
+
+    if (this.readerPty) {
+      this.readerPty.kill();
+      this.readerPty = null;
+    }
+
+    this.parser?.destroy();
+  }
+
+  private applyTmuxOptions(): void {
+    execFileSync('tmux', [
+      'set-option', '-t', this._tmuxSessionName,
+      'status', 'off',
+    ]);
+
+    execFileSync('tmux', [
+      'set-option', '-t', this._tmuxSessionName,
+      'window-size', 'largest',
+    ]);
+
+    execFileSync('tmux', [
+      'set-option', '-t', this._tmuxSessionName,
+      'mouse', 'on',
+    ]);
+
+    execFileSync('tmux', [
+      'set-option', '-t', this._tmuxSessionName,
+      'history-limit', '10000',
+    ]);
+  }
+
+  private attachReaderPty(): void {
+    this.readerPty = pty.spawn('tmux', [
+      'attach-session',
+      '-t', this._tmuxSessionName,
+      '-r',
+    ], {
+      name: 'xterm-256color',
+      cols: this._cols,
+      rows: this._rows,
+      env: process.env as Record<string, string>,
+    });
+
+    this.readerPty.onData((data: string) => {
+      if (this.parser) {
+        this.parser.feed(data);
+      } else {
+        // Shell mode: trigger screen capture directly
+        this._lastActivity = new Date();
+        if (this.hasReceivedResize) {
+          this.scheduleCaptureScreen();
+        }
+      }
+    });
+
+    this.readerPty.onExit(() => {
+      if (!this.isTmuxAlive()) {
+        this.setState('dead');
+        this.emit('exit', 0);
+      }
+    });
+
+    this.healthCheckInterval = setInterval(() => {
+      if (!this.isTmuxAlive()) {
+        this.setState('dead');
+        this.emit('exit', 0);
+        this.stopHealthCheck();
+      }
+    }, 5000);
   }
 
   private buildArgs(): string[] {
@@ -218,15 +277,12 @@ export class ClaudeSession extends EventEmitter {
         '-p', '-e',
       ]);
 
-      // Trim trailing whitespace from each line (prevents overflow when
-      // xterm.js cols don't match tmux exactly) and strip trailing empty lines
       const screen = rawScreen
         .split('\n')
         .map(line => line.trimEnd())
         .join('\n')
         .replace(/\n+$/, '\n');
 
-      // Get cursor position
       let cursorY = 0;
       let cursorX = 0;
       try {
@@ -238,10 +294,9 @@ export class ClaudeSession extends EventEmitter {
         cursorY = parseInt(parts[0] ?? '0', 10);
         cursorX = parseInt(parts[1] ?? '0', 10);
       } catch {
-        // Non-critical — cursor position may be slightly off
+        // Non-critical
       }
 
-      // Only emit if screen actually changed
       if (screen !== this.lastEmittedScreen) {
         this.lastEmittedScreen = screen;
         const cursorSeq = `\x1b[${cursorY + 1};${cursorX + 1}H`;
@@ -260,7 +315,6 @@ export class ClaudeSession extends EventEmitter {
     if (!this.isTmuxAlive()) {
       throw new Error('Session not started');
     }
-    // Send text followed by Enter
     execFileSync('tmux', [
       'send-keys', '-t', this._tmuxSessionName,
       '-l', input,
@@ -269,7 +323,9 @@ export class ClaudeSession extends EventEmitter {
       'send-keys', '-t', this._tmuxSessionName,
       'Enter',
     ]);
-    this.setState('working');
+    if (this.config.sessionType !== 'shell') {
+      this.setState('working');
+    }
   }
 
   sendKey(key: string): void {
@@ -277,7 +333,6 @@ export class ClaudeSession extends EventEmitter {
       throw new Error('Session not started');
     }
 
-    // Map special keys to tmux key names
     const tmuxKey = this.mapKeyToTmux(key);
     if (tmuxKey !== null) {
       execFileSync('tmux', [
@@ -285,7 +340,6 @@ export class ClaudeSession extends EventEmitter {
         tmuxKey,
       ]);
     } else {
-      // Send literal characters
       execFileSync('tmux', [
         'send-keys', '-t', this._tmuxSessionName,
         '-l', key,
@@ -358,6 +412,7 @@ export class ClaudeSession extends EventEmitter {
   getInfo(): SessionInfo {
     return {
       id: this.id,
+      sessionType: this.config.sessionType,
       projectPath: this.config.projectPath,
       projectName: basename(this.config.projectPath),
       model: this.config.model,
@@ -378,13 +433,11 @@ export class ClaudeSession extends EventEmitter {
       this.captureTimer = null;
     }
 
-    // Kill the reader pty
     if (this.readerPty) {
       this.readerPty.kill();
       this.readerPty = null;
     }
 
-    // Kill the tmux session
     try {
       execFileSync('tmux', ['kill-session', '-t', this._tmuxSessionName], {
         stdio: 'ignore',
@@ -393,25 +446,21 @@ export class ClaudeSession extends EventEmitter {
       // Session may already be dead
     }
 
-    this.parser.destroy();
+    this.parser?.destroy();
     this.setState('dead');
   }
 
   resize(cols: number, rows: number): void {
     this.hasReceivedResize = true;
 
-    // Only resize the reader PTY — tmux with window-size=largest will
-    // automatically pick the largest attached client (native terminal if present).
-    // This prevents mobile PWA resizes from shrinking a native terminal.
     if (this.readerPty) {
       this.readerPty.resize(cols, rows);
     }
 
     this._cols = cols;
     this._rows = rows;
-    this.lastEmittedScreen = ''; // Force re-emit after resize
+    this.lastEmittedScreen = '';
 
-    // Delay capture to let the TUI app (Claude Code) re-render after SIGWINCH
     setTimeout(() => {
       void this.captureScreen();
     }, 150);
