@@ -47,3 +47,20 @@ html, body {
 .safe-top {
   padding-top: env(safe-area-inset-top, 0);
 }
+
+/* CodeMirror overrides */
+.cm-editor {
+  height: 100%;
+  font-size: 13px;
+}
+
+.cm-editor .cm-scroller {
+  font-family: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', Menlo, monospace;
+  overflow: auto !important;
+}
+
+/* material-file-icons SVG sizing */
+.file-icon-svg svg {
+  width: 16px;
+  height: 16px;
+}

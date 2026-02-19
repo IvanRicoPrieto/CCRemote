@@ -16,6 +16,7 @@ function App() {
   const {
     connected,
     authenticated,
+    reconnecting,
     sessions,
     error,
     send,
@@ -23,6 +24,12 @@ function App() {
     clearOutputScreen,
     directoryListing,
     scrollbackContent,
+    fileListing,
+    fileContent,
+    fileWriteResult,
+    fileDeleteResult,
+    fileCreateResult,
+    fileRenameResult,
   } = useWebSocket({
     url: connectionConfig?.url ?? '',
     token: connectionConfig?.token ?? '',
@@ -97,6 +104,13 @@ function App() {
           onResize={handleResize}
           onInput={handleInput}
           onRequestScrollback={handleRequestScrollback}
+          send={send}
+          fileListing={fileListing}
+          fileContent={fileContent}
+          fileWriteResult={fileWriteResult}
+          fileDeleteResult={fileDeleteResult}
+          fileCreateResult={fileCreateResult}
+          fileRenameResult={fileRenameResult}
         />
       </div>
     );
@@ -108,6 +122,7 @@ function App() {
       <StatusBar
         connected={connected}
         authenticated={authenticated}
+        reconnecting={reconnecting}
         error={error}
         attentionCount={needsAttention.length}
       />
@@ -117,6 +132,7 @@ function App() {
           onSelectSession={handleSelectSession}
           onCreateSession={() => setShowNewSession(true)}
           onKillSession={handleKillSession}
+          onRefresh={() => send({ type: 'get_sessions', payload: {} })}
         />
       </main>
       {showNewSession && (

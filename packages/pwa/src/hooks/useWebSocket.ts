@@ -5,6 +5,12 @@ import type {
   SessionInfo,
   Capabilities,
   InputRequiredMessage,
+  FileListingMessage,
+  FileContentMessage,
+  FileWriteResultMessage,
+  FileDeleteResultMessage,
+  FileCreateResultMessage,
+  FileRenameResultMessage,
 } from '@ccremote/shared';
 
 interface UseWebSocketOptions {
@@ -22,6 +28,7 @@ export interface DirectoryListing {
 interface UseWebSocketReturn {
   connected: boolean;
   authenticated: boolean;
+  reconnecting: boolean;
   sessions: SessionInfo[];
   capabilities: Capabilities | null;
   error: string | null;
@@ -30,6 +37,12 @@ interface UseWebSocketReturn {
   clearOutputScreen: (sessionId: string) => void;
   directoryListing: DirectoryListing | null;
   scrollbackContent: Map<string, string>;
+  fileListing: FileListingMessage['payload'] | null;
+  fileContent: FileContentMessage['payload'] | null;
+  fileWriteResult: FileWriteResultMessage['payload'] | null;
+  fileDeleteResult: FileDeleteResultMessage['payload'] | null;
+  fileCreateResult: FileCreateResultMessage['payload'] | null;
+  fileRenameResult: FileRenameResultMessage['payload'] | null;
 }
 
 const RECONNECT_DELAYS = [1000, 2000, 4000, 8000, 16000, 30000];
@@ -47,6 +60,13 @@ export function useWebSocket({
   const [outputScreens, setOutputScreens] = useState<Map<string, string>>(new Map());
   const [directoryListing, setDirectoryListing] = useState<DirectoryListing | null>(null);
   const [scrollbackContent, setScrollbackContent] = useState<Map<string, string>>(new Map());
+  const [fileListing, setFileListing] = useState<FileListingMessage['payload'] | null>(null);
+  const [fileContent, setFileContent] = useState<FileContentMessage['payload'] | null>(null);
+  const [fileWriteResult, setFileWriteResult] = useState<FileWriteResultMessage['payload'] | null>(null);
+  const [fileDeleteResult, setFileDeleteResult] = useState<FileDeleteResultMessage['payload'] | null>(null);
+  const [fileCreateResult, setFileCreateResult] = useState<FileCreateResultMessage['payload'] | null>(null);
+  const [fileRenameResult, setFileRenameResult] = useState<FileRenameResultMessage['payload'] | null>(null);
+  const [reconnecting, setReconnecting] = useState(false);
 
   const wsRef = useRef<WebSocket | null>(null);
   const reconnectAttemptRef = useRef(0);
@@ -61,6 +81,7 @@ export function useWebSocket({
 
       ws.onopen = () => {
         setConnected(true);
+        setReconnecting(false);
         setError(null);
         reconnectAttemptRef.current = 0;
         // Send auth immediately
@@ -93,6 +114,7 @@ export function useWebSocket({
   }, [url, token]);
 
   const scheduleReconnect = useCallback(() => {
+    setReconnecting(true);
     const delay = RECONNECT_DELAYS[Math.min(reconnectAttemptRef.current, RECONNECT_DELAYS.length - 1)];
     reconnectAttemptRef.current++;
 
@@ -176,6 +198,30 @@ export function useWebSocket({
         setError(message.payload.message);
         break;
 
+      case 'file_listing':
+        setFileListing(message.payload);
+        break;
+
+      case 'file_content':
+        setFileContent(message.payload);
+        break;
+
+      case 'file_write_result':
+        setFileWriteResult(message.payload);
+        break;
+
+      case 'file_delete_result':
+        setFileDeleteResult(message.payload);
+        break;
+
+      case 'file_create_result':
+        setFileCreateResult(message.payload);
+        break;
+
+      case 'file_rename_result':
+        setFileRenameResult(message.payload);
+        break;
+
       case 'pong':
         // Keep-alive response, nothing to do
         break;
@@ -224,6 +270,7 @@ export function useWebSocket({
   return {
     connected,
     authenticated,
+    reconnecting,
     sessions,
     capabilities,
     error,
@@ -232,5 +279,11 @@ export function useWebSocket({
     clearOutputScreen,
     directoryListing,
     scrollbackContent,
+    fileListing,
+    fileContent,
+    fileWriteResult,
+    fileDeleteResult,
+    fileCreateResult,
+    fileRenameResult,
   };
 }

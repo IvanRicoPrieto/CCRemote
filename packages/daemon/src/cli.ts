@@ -1,8 +1,8 @@
 import { Command } from 'commander';
-import { existsSync, readFileSync, writeFileSync, unlinkSync } from 'node:fs';
+import { existsSync, readFileSync, writeFileSync, unlinkSync, appendFileSync, mkdirSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { spawn, execSync, spawnSync } from 'node:child_process';
+import { spawn, execSync, spawnSync, type ChildProcess } from 'node:child_process';
 import { createServer as createHttpServer } from 'node:http';
 import { createServer as createHttpsServer } from 'node:https';
 import qrcode from 'qrcode-terminal';
@@ -16,6 +16,39 @@ import { connectToDaemon } from './client/DaemonClient.js';
 import type { SessionsListMessage, SessionCreatedMessage, SessionKilledMessage, SessionInfo } from '@ccremote/shared';
 
 const PID_FILE = join(CONFIG_DIR, 'daemon.pid');
+const LOG_FILE = join(CONFIG_DIR, 'daemon.log');
+const MIN_RESTART_INTERVAL_MS = 5000;
+const MAX_RESTART_DELAY_MS = 60000;
+
+const SYSTEMD_SERVICE_NAME = 'ccremote';
+const SYSTEMD_SERVICE_DIR = join(process.env['HOME'] ?? '/tmp', '.config', 'systemd', 'user');
+const SYSTEMD_SERVICE_FILE = join(SYSTEMD_SERVICE_DIR, `${SYSTEMD_SERVICE_NAME}.service`);
+
+function getCompiledEntryPoint(): string {
+  // bin/ccremote.js is next to src/, dist/ is compiled output
+  const thisDir = typeof __dirname !== 'undefined'
+    ? __dirname
+    : dirname(fileURLToPath(import.meta.url));
+  // From src/cli.ts → ../bin/ccremote.js
+  // From dist/cli.js → ../bin/ccremote.js
+  return join(thisDir, '..', 'bin', 'ccremote.js');
+}
+
+function isSystemdInstalled(): boolean {
+  return existsSync(SYSTEMD_SERVICE_FILE);
+}
+
+function isSystemdRunning(): boolean {
+  if (!isSystemdInstalled()) return false;
+  try {
+    const result = spawnSync('systemctl', ['--user', 'is-active', SYSTEMD_SERVICE_NAME], {
+      encoding: 'utf-8',
+    });
+    return result.stdout.trim() === 'active';
+  } catch {
+    return false;
+  }
+}
 
 interface TailscaleInfo {
   ip: string;
@@ -85,34 +118,39 @@ export function createCLI(): Command {
     .option('-p, --port <port>', 'Port to listen on', '9876')
     .option('-f, --foreground', 'Run in foreground (no daemonize)')
     .action(async (options) => {
-      if (isDaemonRunning()) {
-        console.error('Daemon is already running. Use "ccremote stop" first.');
-        process.exit(1);
-      }
-
       const port = parseInt(options.port, 10);
-      const tailscale = getTailscaleInfo();
-
-      if (!tailscale) {
-        console.error('Tailscale is not running or not connected.');
-        console.error('Please run: sudo tailscale up');
-        process.exit(1);
-      }
 
       if (options.foreground) {
+        // Foreground mode — launched directly, by supervisor, or by systemd
+        const tailscale = getTailscaleInfo();
+        if (!tailscale) {
+          console.error('Tailscale is not running or not connected.');
+          console.error('Please run: sudo tailscale up');
+          process.exit(1);
+        }
         await startDaemon(port, tailscale);
+      } else if (isSystemdInstalled()) {
+        // systemd mode — use systemctl
+        if (isSystemdRunning()) {
+          console.log('CCRemote is already running (systemd).');
+          return;
+        }
+        const result = spawnSync('systemctl', ['--user', 'start', SYSTEMD_SERVICE_NAME], { stdio: 'inherit' });
+        if (result.status === 0) {
+          console.log('CCRemote started via systemd.');
+          console.log('  Status: systemctl --user status ccremote');
+          console.log('  Logs:   journalctl --user -u ccremote -f');
+        } else {
+          console.error('Failed to start CCRemote via systemd.');
+          process.exit(1);
+        }
       } else {
-        const child = spawn(process.argv[0]!, [process.argv[1]!, 'start', '-f', '-p', port.toString()], {
-          detached: true,
-          stdio: ['ignore', 'pipe', 'pipe'],
-          env: process.env,
-        });
-        child.unref();
-
-        console.log(`CCRemote daemon starting on port ${port}...`);
-        console.log(`Tailscale IP: ${tailscale.ip}`);
-        console.log(`Hostname: ${tailscale.hostname}`);
-        console.log('Run "ccremote qr" to get a QR code for easy setup');
+        // Supervisor fallback — no systemd installed
+        if (isDaemonRunning()) {
+          console.error('Daemon is already running. Use "ccremote stop" first.');
+          process.exit(1);
+        }
+        runSupervisor(port);
       }
     });
 
@@ -122,6 +160,16 @@ export function createCLI(): Command {
     .description('Stop the CCRemote daemon')
     .option('--kill-sessions', 'Kill all tmux sessions before stopping (by default sessions persist)')
     .action((options) => {
+      if (isSystemdInstalled()) {
+        const result = spawnSync('systemctl', ['--user', 'stop', SYSTEMD_SERVICE_NAME], { stdio: 'inherit' });
+        if (result.status === 0) {
+          console.log('CCRemote stopped (systemd). Sessions persist in tmux.');
+        } else {
+          console.error('Failed to stop CCRemote via systemd.');
+        }
+        return;
+      }
+
       if (!isDaemonRunning()) {
         console.log('Daemon is not running.');
         return;
@@ -129,7 +177,6 @@ export function createCLI(): Command {
       const pid = parseInt(readFileSync(PID_FILE, 'utf-8').trim(), 10);
       try {
         if (options.killSessions) {
-          // Send SIGUSR1 to kill sessions, then SIGTERM to stop
           process.kill(pid, 'SIGUSR1');
           console.log('Daemon stopped (all sessions killed).');
         } else {
@@ -147,13 +194,19 @@ export function createCLI(): Command {
     .description('Show daemon status and active sessions')
     .option('-p, --port <port>', 'Port', '9876')
     .action(async (options) => {
-      if (!isDaemonRunning()) {
+      const running = isSystemdInstalled() ? isSystemdRunning() : isDaemonRunning();
+      if (!running) {
         console.log('Daemon is not running.');
+        if (isSystemdInstalled()) {
+          console.log('  Start with: ccremote start');
+          console.log('  Logs:       journalctl --user -u ccremote --no-pager -n 20');
+        }
         return;
       }
 
+      const mode = isSystemdInstalled() ? 'systemd' : 'supervisor';
       const tailscale = getTailscaleInfo();
-      console.log('Daemon: running');
+      console.log(`Daemon: running (${mode})`);
       if (tailscale) {
         console.log(`Tailscale IP: ${tailscale.ip}`);
         console.log(`Hostname: ${tailscale.hostname}`);
@@ -374,7 +427,185 @@ export function createCLI(): Command {
       }
     });
 
+  // INSTALL command
+  program
+    .command('install')
+    .description('Install CCRemote as a systemd user service (auto-start, auto-restart)')
+    .option('-p, --port <port>', 'Port to listen on', '9876')
+    .action((options) => {
+      const entryPoint = getCompiledEntryPoint();
+      if (!existsSync(entryPoint)) {
+        console.error(`Compiled entry point not found: ${entryPoint}`);
+        console.error('Run "npm run build" first.');
+        process.exit(1);
+      }
+
+      const nodePath = process.execPath;
+      const port = options.port;
+      const workDir = join(dirname(entryPoint), '..');
+
+      const serviceContent = `[Unit]
+Description=CCRemote - Remote control for Claude Code
+After=network-online.target
+
+[Service]
+Type=simple
+ExecStart=${nodePath} ${entryPoint} start -f -p ${port}
+Restart=always
+RestartSec=3
+Environment=PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+Environment=HOME=${process.env['HOME'] ?? ''}
+WorkingDirectory=${workDir}
+
+[Install]
+WantedBy=default.target
+`;
+
+      mkdirSync(SYSTEMD_SERVICE_DIR, { recursive: true });
+      writeFileSync(SYSTEMD_SERVICE_FILE, serviceContent);
+      console.log(`Service file written: ${SYSTEMD_SERVICE_FILE}`);
+
+      // Stop existing daemon if running via PID file
+      if (isDaemonRunning()) {
+        const pid = parseInt(readFileSync(PID_FILE, 'utf-8').trim(), 10);
+        try {
+          process.kill(pid, 'SIGTERM');
+          console.log('Stopped existing daemon (PID file).');
+        } catch { /* already dead */ }
+      }
+
+      const reload = spawnSync('systemctl', ['--user', 'daemon-reload'], { stdio: 'inherit' });
+      if (reload.status !== 0) {
+        console.error('Failed to reload systemd.');
+        process.exit(1);
+      }
+
+      const enable = spawnSync('systemctl', ['--user', 'enable', '--now', SYSTEMD_SERVICE_NAME], { stdio: 'inherit' });
+      if (enable.status !== 0) {
+        console.error('Failed to enable/start service.');
+        process.exit(1);
+      }
+
+      console.log('\nCCRemote installed as systemd user service.');
+      console.log('  Status:  systemctl --user status ccremote');
+      console.log('  Logs:    journalctl --user -u ccremote -f');
+      console.log('  Stop:    ccremote stop');
+      console.log('  Remove:  ccremote uninstall');
+    });
+
+  // UNINSTALL command
+  program
+    .command('uninstall')
+    .description('Remove CCRemote systemd user service')
+    .action(() => {
+      if (!isSystemdInstalled()) {
+        console.log('CCRemote is not installed as a systemd service.');
+        return;
+      }
+
+      spawnSync('systemctl', ['--user', 'disable', '--now', SYSTEMD_SERVICE_NAME], { stdio: 'inherit' });
+      unlinkSync(SYSTEMD_SERVICE_FILE);
+      spawnSync('systemctl', ['--user', 'daemon-reload'], { stdio: 'inherit' });
+
+      console.log('CCRemote systemd service removed.');
+    });
+
   return program;
+}
+
+function logToFile(message: string): void {
+  const ts = new Date().toISOString();
+  const line = `[${ts}] ${message}\n`;
+  try {
+    appendFileSync(LOG_FILE, line);
+  } catch {
+    // Can't write log — not critical
+  }
+}
+
+function runSupervisor(port: number): void {
+  ensureConfigDir();
+
+  let consecutiveQuickDeaths = 0;
+  let stopping = false;
+  let child: ChildProcess | null = null;
+
+  const spawnDaemon = (): void => {
+    const startTime = Date.now();
+
+    logToFile(`Supervisor: starting daemon on port ${port} (pid=${process.pid})`);
+
+    child = spawn(process.execPath, [...process.execArgv, process.argv[1]!, 'start', '-f', '-p', port.toString()], {
+      stdio: ['ignore', 'pipe', 'pipe'],
+      env: process.env,
+    });
+
+    child.stdout?.on('data', (data: Buffer) => {
+      process.stdout.write(data);
+      logToFile(data.toString().trimEnd());
+    });
+
+    child.stderr?.on('data', (data: Buffer) => {
+      process.stderr.write(data);
+      logToFile(`[stderr] ${data.toString().trimEnd()}`);
+    });
+
+    child.on('exit', (code, signal) => {
+      if (stopping) {
+        logToFile(`Supervisor: daemon stopped (code=${code}, signal=${signal})`);
+        removePidFile();
+        process.exit(0);
+      }
+
+      const uptime = Date.now() - startTime;
+      logToFile(`Supervisor: daemon exited (code=${code}, signal=${signal}, uptime=${uptime}ms)`);
+
+      if (uptime < MIN_RESTART_INTERVAL_MS) {
+        consecutiveQuickDeaths++;
+      } else {
+        consecutiveQuickDeaths = 0;
+      }
+
+      // Exponential backoff: 1s, 2s, 4s, 8s, ... capped at MAX_RESTART_DELAY_MS
+      const delay = Math.min(1000 * Math.pow(2, consecutiveQuickDeaths), MAX_RESTART_DELAY_MS);
+      logToFile(`Supervisor: restarting in ${delay}ms (quick deaths: ${consecutiveQuickDeaths})`);
+
+      setTimeout(spawnDaemon, delay);
+    });
+  };
+
+  // Supervisor PID file — so `ccremote stop` can kill us
+  writePidFile();
+
+  const stopChild = (sig: NodeJS.Signals) => {
+    stopping = true;
+    if (child) {
+      child.kill(sig);
+    } else {
+      removePidFile();
+      process.exit(0);
+    }
+  };
+
+  process.on('SIGTERM', () => stopChild('SIGTERM'));
+  process.on('SIGINT', () => stopChild('SIGINT'));
+  process.on('SIGUSR1', () => {
+    stopping = true;
+    if (child) {
+      child.kill('SIGUSR1');
+    } else {
+      removePidFile();
+      process.exit(0);
+    }
+  });
+
+  // Detach from terminal
+  process.stdin.unref?.();
+
+  spawnDaemon();
+
+  console.log(`CCRemote supervisor started (pid=${process.pid}), daemon will auto-restart on crash.`);
+  console.log(`Logs: ${LOG_FILE}`);
 }
 
 async function startDaemon(port: number, tailscale: TailscaleInfo): Promise<void> {
@@ -386,6 +617,30 @@ async function startDaemon(port: number, tailscale: TailscaleInfo): Promise<void
     console.error('Install it with: sudo apt install tmux');
     process.exit(1);
   }
+
+  // Protect against unhandled errors crashing the daemon.
+  // If errors repeat too fast (>10 in 5s), let the process die so the supervisor restarts clean.
+  let errorCount = 0;
+  let errorWindowStart = Date.now();
+  const MAX_ERRORS_PER_WINDOW = 10;
+  const ERROR_WINDOW_MS = 5000;
+
+  const handleFatalError = (label: string, err: unknown) => {
+    const now = Date.now();
+    if (now - errorWindowStart > ERROR_WINDOW_MS) {
+      errorCount = 0;
+      errorWindowStart = now;
+    }
+    errorCount++;
+    console.error(`[CCRemote] ${label}:`, err);
+    if (errorCount >= MAX_ERRORS_PER_WINDOW) {
+      console.error(`[CCRemote] Too many errors (${errorCount} in ${ERROR_WINDOW_MS}ms), exiting for clean restart.`);
+      process.exit(1);
+    }
+  };
+
+  process.on('uncaughtException', (error) => handleFatalError('Uncaught exception', error));
+  process.on('unhandledRejection', (reason) => handleFatalError('Unhandled rejection', reason));
 
   console.log('Starting CCRemote daemon...');
 
@@ -413,6 +668,28 @@ async function startDaemon(port: number, tailscale: TailscaleInfo): Promise<void
 
   // Create static file handler
   const staticHandler = pwaAvailable ? createStaticHandler(pwaDistPath) : null;
+  const startTime = Date.now();
+
+  const requestHandler = (req: import('node:http').IncomingMessage, res: import('node:http').ServerResponse) => {
+    // Health endpoint
+    if (req.url === '/health' && (req.method === 'GET' || req.method === 'HEAD')) {
+      const body = JSON.stringify({
+        status: 'ok',
+        uptime: Math.floor((Date.now() - startTime) / 1000),
+        sessions: sessionManager.getAllSessionInfos().length,
+      });
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(body);
+      return;
+    }
+
+    if (staticHandler) {
+      staticHandler(req, res);
+    } else {
+      res.writeHead(200, { 'Content-Type': 'text/plain' });
+      res.end('CCRemote daemon running. PWA not built.');
+    }
+  };
 
   // Try to get Tailscale HTTPS certs
   const certs = tailscale.hostname ? getTailscaleCerts(tailscale.hostname) : null;
@@ -420,30 +697,14 @@ async function startDaemon(port: number, tailscale: TailscaleInfo): Promise<void
 
   // Create HTTP or HTTPS server
   const httpServer = useHttps
-    ? createHttpsServer({ cert: certs.cert, key: certs.key }, (req, res) => {
-        if (staticHandler) {
-          staticHandler(req, res);
-        } else {
-          res.writeHead(200, { 'Content-Type': 'text/plain' });
-          res.end('CCRemote daemon running. PWA not built.');
-        }
-      })
-    : createHttpServer((req, res) => {
-        if (staticHandler) {
-          staticHandler(req, res);
-        } else {
-          res.writeHead(200, { 'Content-Type': 'text/plain' });
-          res.end('CCRemote daemon running. PWA not built.');
-        }
-      });
+    ? createHttpsServer({ cert: certs.cert, key: certs.key }, requestHandler)
+    : createHttpServer(requestHandler);
 
   // Attach WebSocket to the HTTP server
   const wsServer = new WebSocketServerWrapper(httpServer, db, sessionManager);
 
   // Listen on both Tailscale IP and localhost
   httpServer.listen(port, '0.0.0.0', () => {
-    writePidFile();
-
     const protocol = useHttps ? 'https' : 'http';
     const wsProtocol = useHttps ? 'wss' : 'ws';
     const host = tailscale.hostname || tailscale.ip;
@@ -466,7 +727,6 @@ async function startDaemon(port: number, tailscale: TailscaleInfo): Promise<void
     wsServer.close();
     httpServer.close();
     db.close();
-    removePidFile();
     process.exit(0);
   };
 
@@ -477,7 +737,6 @@ async function startDaemon(port: number, tailscale: TailscaleInfo): Promise<void
     wsServer.close();
     httpServer.close();
     db.close();
-    removePidFile();
     process.exit(0);
   };
 

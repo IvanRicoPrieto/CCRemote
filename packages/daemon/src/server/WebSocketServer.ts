@@ -10,6 +10,7 @@ import type {
   SessionInfo,
 } from '@ccremote/shared';
 import { validateToken } from '../auth/TokenAuth.js';
+import { listDirectory, readFileContent, writeFileContent, deleteFile, createFile, createDirectory, renameFile } from './fileHandlers.js';
 import { SessionManager } from '../session/SessionManager.js';
 import { capabilities } from '../capabilities/ClaudeCapabilities.js';
 import type { InputRequiredEvent } from '../session/OutputParser.js';
@@ -173,6 +174,27 @@ export class WebSocketServerWrapper {
       case 'browse_directory':
         this.handleBrowseDirectory(client.ws, message.payload.path);
         break;
+      case 'browse_files':
+        this.handleBrowseFiles(client.ws, message.payload.sessionId, message.payload.path);
+        break;
+      case 'read_file':
+        this.handleReadFile(client.ws, message.payload.sessionId, message.payload.path);
+        break;
+      case 'write_file':
+        this.handleWriteFile(client.ws, message.payload.sessionId, message.payload.path, message.payload.content);
+        break;
+      case 'delete_file':
+        this.handleDeleteFile(client.ws, message.payload.sessionId, message.payload.path);
+        break;
+      case 'create_file':
+        this.handleCreateFile(client.ws, message.payload.sessionId, message.payload.path);
+        break;
+      case 'create_directory':
+        this.handleCreateDirectory(client.ws, message.payload.sessionId, message.payload.path);
+        break;
+      case 'rename_file':
+        this.handleRenameFile(client.ws, message.payload.sessionId, message.payload.oldPath, message.payload.newPath);
+        break;
     }
   }
 
@@ -315,6 +337,83 @@ export class WebSocketServerWrapper {
     } else {
       this.sendError(ws, `Unknown mode: ${mode}`, sessionId);
     }
+  }
+
+  private async handleBrowseFiles(ws: WebSocket, sessionId: string, path: string): Promise<void> {
+    const session = this.sessionManager.getSession(sessionId);
+    if (!session) {
+      this.sendError(ws, `Session ${sessionId} not found`, sessionId);
+      return;
+    }
+    const projectPath = session.getInfo().projectPath;
+    const result = await listDirectory(projectPath, path || projectPath);
+    this.send(ws, { type: 'file_listing', payload: result });
+  }
+
+  private async handleReadFile(ws: WebSocket, sessionId: string, filePath: string): Promise<void> {
+    const session = this.sessionManager.getSession(sessionId);
+    if (!session) {
+      this.sendError(ws, `Session ${sessionId} not found`, sessionId);
+      return;
+    }
+    const projectPath = session.getInfo().projectPath;
+    const result = await readFileContent(projectPath, filePath);
+    this.send(ws, { type: 'file_content', payload: result });
+  }
+
+  private async handleWriteFile(ws: WebSocket, sessionId: string, filePath: string, content: string): Promise<void> {
+    const session = this.sessionManager.getSession(sessionId);
+    if (!session) {
+      this.sendError(ws, `Session ${sessionId} not found`, sessionId);
+      return;
+    }
+    const projectPath = session.getInfo().projectPath;
+    const result = await writeFileContent(projectPath, filePath, content);
+    this.send(ws, { type: 'file_write_result', payload: result });
+  }
+
+  private async handleDeleteFile(ws: WebSocket, sessionId: string, filePath: string): Promise<void> {
+    const session = this.sessionManager.getSession(sessionId);
+    if (!session) {
+      this.sendError(ws, `Session ${sessionId} not found`, sessionId);
+      return;
+    }
+    const projectPath = session.getInfo().projectPath;
+    const result = await deleteFile(projectPath, filePath);
+    this.send(ws, { type: 'file_delete_result', payload: result });
+  }
+
+  private async handleCreateFile(ws: WebSocket, sessionId: string, filePath: string): Promise<void> {
+    const session = this.sessionManager.getSession(sessionId);
+    if (!session) {
+      this.sendError(ws, `Session ${sessionId} not found`, sessionId);
+      return;
+    }
+    const projectPath = session.getInfo().projectPath;
+    const result = await createFile(projectPath, filePath);
+    this.send(ws, { type: 'file_create_result', payload: result });
+  }
+
+  private async handleCreateDirectory(ws: WebSocket, sessionId: string, dirPath: string): Promise<void> {
+    const session = this.sessionManager.getSession(sessionId);
+    if (!session) {
+      this.sendError(ws, `Session ${sessionId} not found`, sessionId);
+      return;
+    }
+    const projectPath = session.getInfo().projectPath;
+    const result = await createDirectory(projectPath, dirPath);
+    this.send(ws, { type: 'file_create_result', payload: result });
+  }
+
+  private async handleRenameFile(ws: WebSocket, sessionId: string, oldPath: string, newPath: string): Promise<void> {
+    const session = this.sessionManager.getSession(sessionId);
+    if (!session) {
+      this.sendError(ws, `Session ${sessionId} not found`, sessionId);
+      return;
+    }
+    const projectPath = session.getInfo().projectPath;
+    const result = await renameFile(projectPath, oldPath, newPath);
+    this.send(ws, { type: 'file_rename_result', payload: result });
   }
 
   private async handleBrowseDirectory(ws: WebSocket, path: string): Promise<void> {

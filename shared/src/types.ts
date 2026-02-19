@@ -61,3 +61,9 @@ export interface Capabilities {
   modes: ModeInfo[];
   commands: CommandInfo[];
 }
+
+export interface FileListingEntry {
+  name: string;
+  isDirectory: boolean;
+  size: number;
+}

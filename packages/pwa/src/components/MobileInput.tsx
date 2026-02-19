@@ -7,71 +7,61 @@ interface MobileInputProps {
 
 export function MobileInput({ onSend }: MobileInputProps) {
   const [value, setValue] = useState('');
-  const prevValueRef = useRef('');
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
 
-  const handleChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
-    const newValue = e.target.value;
-    const prevValue = prevValueRef.current;
+  const autoResize = useCallback((el: HTMLTextAreaElement) => {
+    el.style.height = 'auto';
+    // Clamp between 1 and 4 lines (line-height ~20px + padding)
+    el.style.height = `${Math.min(el.scrollHeight, 96)}px`;
+  }, []);
 
-    // Find common prefix length
-    let common = 0;
-    while (
-      common < prevValue.length &&
-      common < newValue.length &&
-      prevValue[common] === newValue[common]
-    ) {
-      common++;
-    }
+  const handleChange = useCallback((e: React.ChangeEvent<HTMLTextAreaElement>) => {
+    setValue(e.target.value);
+    autoResize(e.target);
+  }, [autoResize]);
 
-    // Send backspaces for removed characters
-    const deletions = prevValue.length - common;
-    for (let i = 0; i < deletions; i++) {
-      onSend('\x7f'); // Backspace
-    }
-
-    // Send new characters as literal text
-    const added = newValue.slice(common);
-    if (added) {
-      onSend(added);
-    }
-
-    prevValueRef.current = newValue;
-    setValue(newValue);
-  }, [onSend]);
-
-  const handleKeyDown = useCallback((e: React.KeyboardEvent<HTMLInputElement>) => {
-    if (e.key === 'Enter') {
-      e.preventDefault();
+  const sendText = useCallback(() => {
+    const text = value.trim();
+    if (!text) {
+      // Empty text: just send Enter (submit)
       onSend('\r');
-      setValue('');
-      prevValueRef.current = '';
+      return;
     }
-  }, [onSend]);
-
-  const handleSendTap = useCallback(() => {
+    // Send each line separated by \r (Enter in terminal)
+    const lines = text.split('\n');
+    for (let i = 0; i < lines.length; i++) {
+      if (lines[i]) {
+        onSend(lines[i]);
+      }
+      if (i < lines.length - 1) {
+        onSend('\r');
+      }
+    }
     onSend('\r');
     setValue('');
-    prevValueRef.current = '';
-  }, [onSend]);
+    if (textareaRef.current) {
+      textareaRef.current.style.height = 'auto';
+    }
+  }, [value, onSend]);
 
   return (
-    <div className="flex items-center gap-1.5 px-2 py-1.5 bg-slate-800/95 border-t border-slate-700/50">
-      <input
-        type="text"
+    <div className="flex items-end gap-1.5 px-2 py-1.5 bg-slate-800/95 border-t border-slate-700/50">
+      <textarea
+        ref={textareaRef}
         value={value}
         onChange={handleChange}
-        onKeyDown={handleKeyDown}
+        rows={1}
         autoComplete="on"
         autoCorrect="on"
         autoCapitalize="sentences"
         spellCheck={false}
         placeholder="Escribe aqui..."
-        className="flex-1 h-10 px-3 rounded-lg bg-slate-700/80 text-slate-200 text-sm placeholder-slate-400 outline-none focus:ring-1 focus:ring-indigo-500/50"
+        className="flex-1 min-h-[40px] max-h-[96px] px-3 py-2.5 rounded-lg bg-slate-700/80 text-slate-200 text-sm placeholder-slate-400 outline-none focus:ring-1 focus:ring-indigo-500/50 resize-none leading-5"
       />
       <button
         tabIndex={-1}
-        onPointerDown={(e) => { e.preventDefault(); (document.activeElement as HTMLElement)?.blur(); handleSendTap(); }}
-        className="flex items-center justify-center h-10 w-10 rounded-lg bg-indigo-600/80 active:bg-indigo-500 text-white select-none touch-manipulation"
+        onPointerDown={(e) => { e.preventDefault(); sendText(); }}
+        className="flex items-center justify-center h-10 w-10 shrink-0 rounded-lg bg-indigo-600/80 active:bg-indigo-500 text-white select-none touch-manipulation"
       >
         <Send size={18} />
       </button>
