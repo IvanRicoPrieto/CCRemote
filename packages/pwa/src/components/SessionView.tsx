@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, lazy, Suspense } from 'react';
+import { useState, useEffect, useRef, useCallback, lazy, Suspense } from 'react';
 import { ArrowLeft, X, Copy, Check, Terminal, FolderTree } from 'lucide-react';
 import type { SessionInfo, ClientMessage, FileListingMessage, FileContentMessage, FileWriteResultMessage, FileDeleteResultMessage, FileCreateResultMessage, FileRenameResultMessage } from '@ccremote/shared';
 import { TerminalOutput } from './TerminalOutput.tsx';
@@ -18,6 +18,7 @@ interface SessionViewProps {
   onInput?: (data: string) => void;
   onRequestScrollback?: () => void;
   send: (message: ClientMessage) => void;
+  authToken: string;
   fileListing: FileListingMessage['payload'] | null;
   fileContent: FileContentMessage['payload'] | null;
   fileWriteResult: FileWriteResultMessage['payload'] | null;
@@ -35,6 +36,7 @@ export function SessionView({
   onInput,
   onRequestScrollback,
   send,
+  authToken,
   fileListing,
   fileContent,
   fileWriteResult,
@@ -152,6 +154,16 @@ export function SessionView({
     } catch { /* clipboard may not be available */ }
   };
 
+  const handleDownloadFile = useCallback((filePath: string) => {
+    const params = new URLSearchParams({
+      token: authToken,
+      sessionId: session.id,
+      path: filePath,
+    });
+    const url = `${window.location.origin}/download?${params.toString()}`;
+    window.open(url, '_blank');
+  }, [authToken, session.id]);
+
   return (
     <div ref={rootRef} className="h-full w-full flex flex-col overflow-hidden">
       <div className="flex-1 relative min-h-0">
@@ -257,6 +269,7 @@ export function SessionView({
               onCreateFile={explorer.createFile}
               onCreateDirectory={explorer.createDirectory}
               onRenameFile={explorer.renameFile}
+              onDownloadFile={handleDownloadFile}
               onRequestListing={explorer.requestListing}
             />
           </div>

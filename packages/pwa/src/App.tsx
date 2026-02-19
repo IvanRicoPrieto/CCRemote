@@ -105,6 +105,7 @@ function App() {
           onInput={handleInput}
           onRequestScrollback={handleRequestScrollback}
           send={send}
+          authToken={connectionConfig.token}
           fileListing={fileListing}
           fileContent={fileContent}
           fileWriteResult={fileWriteResult}

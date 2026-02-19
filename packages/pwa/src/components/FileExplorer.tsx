@@ -1,5 +1,5 @@
 import { useEffect, useState, useRef } from 'react';
-import { Folder, FolderOpen, ChevronRight, ChevronDown, FileText, Copy, ClipboardCopy, Trash2, Pencil, FilePlus, FolderPlus, Search, X } from 'lucide-react';
+import { Folder, FolderOpen, ChevronRight, ChevronDown, FileText, Copy, ClipboardCopy, Trash2, Pencil, FilePlus, FolderPlus, Search, X, Download } from 'lucide-react';
 import type { FileTreeNode } from '../hooks/useFileExplorer.ts';
 import { getFileIconSvg, isTextFile, formatFileSize } from '../lib/fileUtils.ts';
 
@@ -14,6 +14,7 @@ interface FileExplorerProps {
   onCreateFile: (path: string) => void;
   onCreateDirectory: (path: string) => void;
   onRenameFile: (oldPath: string, newPath: string) => void;
+  onDownloadFile: (path: string) => void;
   onRequestListing: (path: string) => void;
 }
 
@@ -34,6 +35,7 @@ export function FileExplorer({
   onCreateFile,
   onCreateDirectory,
   onRenameFile,
+  onDownloadFile,
   onRequestListing,
 }: FileExplorerProps) {
   const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null);
@@ -131,6 +133,11 @@ export function FileExplorer({
     }
     setCreateMode(null);
     setCreateName('');
+  };
+
+  const handleDownload = (node: FileTreeNode) => {
+    onDownloadFile(node.path);
+    setContextMenu(null);
   };
 
   const handleStartRename = (node: FileTreeNode) => {
@@ -247,6 +254,7 @@ export function FileExplorer({
           onCopyPath={() => handleCopyPath(contextMenu.node.path)}
           onCopyRelativePath={() => handleCopyRelativePath(contextMenu.node.path)}
           onRename={() => handleStartRename(contextMenu.node)}
+          onDownload={() => handleDownload(contextMenu.node)}
           onNewFile={() => handleStartCreate('file', contextMenu.node.isDirectory ? contextMenu.node.path : contextMenu.node.path.substring(0, contextMenu.node.path.lastIndexOf('/')))}
           onNewFolder={() => handleStartCreate('directory', contextMenu.node.isDirectory ? contextMenu.node.path : contextMenu.node.path.substring(0, contextMenu.node.path.lastIndexOf('/')))}
           onDelete={() => handleDeleteRequest(contextMenu.node)}
@@ -365,12 +373,13 @@ interface ContextMenuProps {
   onCopyPath: () => void;
   onCopyRelativePath: () => void;
   onRename: () => void;
+  onDownload: () => void;
   onNewFile: () => void;
   onNewFolder: () => void;
   onDelete: () => void;
 }
 
-function ContextMenu({ node, x, y, onOpen, onCopyPath, onCopyRelativePath, onRename, onNewFile, onNewFolder, onDelete }: ContextMenuProps) {
+function ContextMenu({ node, x, y, onOpen, onCopyPath, onCopyRelativePath, onRename, onDownload, onNewFile, onNewFolder, onDelete }: ContextMenuProps) {
   const ref = useRef<HTMLDivElement>(null);
   const [pos, setPos] = useState({ x, y });
   const canOpen = node.isDirectory || isTextFile(node.name);
@@ -401,6 +410,12 @@ function ContextMenu({ node, x, y, onOpen, onCopyPath, onCopyRelativePath, onRen
         <button className={itemClass} onClick={onOpen}>
           <FileText size={15} className="text-slate-400" />
           <span className="text-slate-200">Abrir</span>
+        </button>
+      )}
+      {!node.isDirectory && (
+        <button className={itemClass} onClick={onDownload}>
+          <Download size={15} className="text-slate-400" />
+          <span className="text-slate-200">Descargar</span>
         </button>
       )}
       <button className={itemClass} onClick={onRename}>

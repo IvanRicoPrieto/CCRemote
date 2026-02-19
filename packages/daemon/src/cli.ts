@@ -1,16 +1,17 @@
 import { Command } from 'commander';
-import { existsSync, readFileSync, writeFileSync, unlinkSync, appendFileSync, mkdirSync } from 'node:fs';
-import { join, dirname } from 'node:path';
+import { existsSync, readFileSync, writeFileSync, unlinkSync, appendFileSync, mkdirSync, createReadStream, statSync } from 'node:fs';
+import { join, dirname, basename, extname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawn, execSync, spawnSync, type ChildProcess } from 'node:child_process';
 import { createServer as createHttpServer } from 'node:http';
 import { createServer as createHttpsServer } from 'node:https';
 import qrcode from 'qrcode-terminal';
 import { getDatabase, initializeDatabase, CONFIG_DIR, ensureConfigDir } from './db/database.js';
-import { getOrCreateToken, regenerateToken } from './auth/TokenAuth.js';
+import { getOrCreateToken, regenerateToken, validateToken } from './auth/TokenAuth.js';
 import { SessionManager } from './session/SessionManager.js';
 import { WebSocketServerWrapper } from './server/WebSocketServer.js';
 import { createStaticHandler } from './server/StaticFileServer.js';
+import { validatePathInProject } from './server/fileHandlers.js';
 import { getTailscaleCerts } from './server/TailscaleCerts.js';
 import { connectToDaemon } from './client/DaemonClient.js';
 import type { SessionsListMessage, SessionCreatedMessage, SessionKilledMessage, SessionInfo } from '@ccremote/shared';
@@ -680,6 +681,61 @@ async function startDaemon(port: number, tailscale: TailscaleInfo): Promise<void
       });
       res.writeHead(200, { 'Content-Type': 'application/json' });
       res.end(body);
+      return;
+    }
+
+    // File download endpoint
+    if (req.url?.startsWith('/download?') && req.method === 'GET') {
+      const url = new URL(req.url, `http://${req.headers.host ?? 'localhost'}`);
+      const dlToken = url.searchParams.get('token');
+      const sessionId = url.searchParams.get('sessionId');
+      const filePath = url.searchParams.get('path');
+
+      if (!dlToken || !validateToken(db, dlToken)) {
+        res.writeHead(401, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: 'No autorizado' }));
+        return;
+      }
+
+      if (!sessionId || !filePath) {
+        res.writeHead(400, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: 'Faltan parámetros: sessionId, path' }));
+        return;
+      }
+
+      const session = sessionManager.getSession(sessionId);
+      if (!session) {
+        res.writeHead(404, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: 'Sesión no encontrada' }));
+        return;
+      }
+
+      const projectPath = session.getInfo().projectPath;
+      const resolved = validatePathInProject(projectPath, filePath);
+      if (!resolved) {
+        res.writeHead(403, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: 'Ruta fuera del proyecto' }));
+        return;
+      }
+
+      try {
+        const fileStat = statSync(resolved);
+        if (fileStat.isDirectory()) {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: 'No se puede descargar una carpeta' }));
+          return;
+        }
+        const fileName = basename(resolved);
+        res.writeHead(200, {
+          'Content-Type': 'application/octet-stream',
+          'Content-Disposition': `attachment; filename="${encodeURIComponent(fileName)}"`,
+          'Content-Length': fileStat.size,
+        });
+        createReadStream(resolved).pipe(res);
+      } catch {
+        res.writeHead(404, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: 'Archivo no encontrado' }));
+      }
       return;
     }
 
